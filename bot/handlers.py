@@ -327,6 +327,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def chat_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает ID текущего чата — нужен для настройки WORK_CHAT_ID."""
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"ID этого чата: `{chat.id}`\n"
+        f"Тип: {chat.type}\n\n"
+        "Скопируйте число (вместе со знаком «−») в переменную "
+        "WORK_CHAT_ID в файле .env.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
 def build_conversation_handler() -> ConversationHandler:
     """Собирает ConversationHandler со всеми шагами диалога."""
     text_only = filters.TEXT & ~filters.COMMAND

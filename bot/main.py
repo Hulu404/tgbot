@@ -5,7 +5,7 @@ import logging
 from telegram.ext import Application, CommandHandler
 
 import config
-from handlers import build_conversation_handler, help_command
+from handlers import build_conversation_handler, chat_id_command, help_command
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -24,6 +24,7 @@ def main() -> None:
 
     application.add_handler(build_conversation_handler())
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("chatid", chat_id_command))
 
     logger.info("Бот запущен. Ожидание сообщений...")
     application.run_polling()

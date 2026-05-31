@@ -1,7 +1,10 @@
 """Загрузка конфигурации из переменных окружения (.env)."""
 
+import base64
 import logging
 import os
+import re
+from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 
@@ -9,9 +12,40 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
+def _normalize_calendar_id(raw: str) -> str:
+    """Приводит CALENDAR_ID к виду, который понимает Google Calendar API.
+
+    Пользователь часто вставляет полную ссылку на календарь вида
+    «https://calendar.google.com/calendar/u/1?cid=<base64>». API же ждёт
+    идентификатор календаря (обычно e-mail). Достаём cid и декодируем его.
+    """
+    raw = raw.strip()
+    if not raw or "calendar.google.com" not in raw:
+        return raw
+
+    cid_values = parse_qs(urlparse(raw).query).get("cid")
+    if not cid_values:
+        return raw
+
+    cid = cid_values[0]
+    # base64url может быть без выравнивающих «=» — дополняем перед декодированием.
+    padded = cid + "=" * (-len(cid) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("Не удалось декодировать cid календаря из ссылки: %r", raw)
+        return raw
+
+    # Декодированное значение должно выглядеть как идентификатор календаря.
+    if re.fullmatch(r"[^@\s]+@[^@\s]+", decoded) or "group.calendar.google.com" in decoded:
+        return decoded
+    return decoded
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WORK_CHAT_ID = os.getenv("WORK_CHAT_ID", "")
-CALENDAR_ID = os.getenv("CALENDAR_ID", "")
+CALENDAR_ID = _normalize_calendar_id(os.getenv("CALENDAR_ID", ""))
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
 
