@@ -3,7 +3,6 @@
 import asyncio
 import datetime
 import logging
-import os
 import re
 
 from google.auth.exceptions import GoogleAuthError
@@ -11,7 +10,12 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from config import CALENDAR_ID, GOOGLE_CREDENTIALS_JSON, TIMEZONE
+from config import (
+    CALENDAR_ID,
+    GOOGLE_CREDENTIALS_INFO,
+    TIMEZONE,
+    google_credentials_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +28,14 @@ _TIME_RANGE_RE = re.compile(
 
 
 def calendar_enabled() -> bool:
-    """Доступна ли интеграция с Google Calendar (есть конфиг и файл ключа)."""
-    return bool(CALENDAR_ID) and os.path.exists(GOOGLE_CREDENTIALS_JSON)
+    """Доступна ли интеграция с Google Calendar (есть CALENDAR_ID и ключ)."""
+    return bool(CALENDAR_ID) and google_credentials_available()
 
 
 def _build_service():
     """Создаёт клиент Google Calendar API (синхронно)."""
-    credentials = service_account.Credentials.from_service_account_file(
-        GOOGLE_CREDENTIALS_JSON, scopes=SCOPES
+    credentials = service_account.Credentials.from_service_account_info(
+        GOOGLE_CREDENTIALS_INFO, scopes=SCOPES
     )
     return build("calendar", "v3", credentials=credentials, cache_discovery=False)
 
@@ -46,8 +50,11 @@ def check_access() -> tuple[bool, str]:
     """
     if not CALENDAR_ID:
         return False, "CALENDAR_ID не задан"
-    if not os.path.exists(GOOGLE_CREDENTIALS_JSON):
-        return False, f"файл ключа не найден: {GOOGLE_CREDENTIALS_JSON}"
+    if not google_credentials_available():
+        return False, (
+            "ключ сервисного аккаунта не задан "
+            "(GOOGLE_CREDENTIALS_JSON_B64 или файл credentials.json)"
+        )
     try:
         service = _build_service()
         info = service.calendars().get(calendarId=CALENDAR_ID).execute()

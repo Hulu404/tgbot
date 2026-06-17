@@ -1,9 +1,9 @@
 """Точка входа: настройка логирования и запуск Telegram-бота."""
 
 import logging
-import os
 
-from telegram.ext import Application, CommandHandler
+from telegram.error import Conflict
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 import calendar_api
 import config
@@ -17,6 +17,26 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Глобальный обработчик ошибок.
+
+    Без него любая ошибка (включая сетевые) валится полным трейсбеком в лог.
+    Конфликт getUpdates на Railway почти всегда означает короткое наложение
+    деплоев (новый контейнер уже поднят, старый ещё не погашен) — пишем одну
+    понятную строку вместо простыни и не считаем это аварией.
+    """
+    error = context.error
+    if isinstance(error, Conflict):
+        logger.warning(
+            "Conflict getUpdates: с этим токеном опрашивает обновления другая "
+            "копия бота. Обычно это переходное наложение деплоев и проходит "
+            "само; если повторяется — проверь, что запущен ровно один экземпляр."
+        )
+        return
+
+    logger.error("Необработанная ошибка при обработке обновления: %s", error, exc_info=error)
 
 
 def main() -> None:
@@ -45,7 +65,7 @@ def main() -> None:
             "Google Calendar отключён (CALENDAR_ID=%r, ключ: %s). "
             "События сохраняться НЕ будут.",
             config.CALENDAR_ID,
-            "найден" if os.path.exists(config.GOOGLE_CREDENTIALS_JSON) else "не найден",
+            "найден" if config.google_credentials_available() else "не найден",
         )
 
     application = Application.builder().token(config.BOT_TOKEN).build()
@@ -53,9 +73,12 @@ def main() -> None:
     application.add_handler(build_conversation_handler())
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("chatid", chat_id_command))
+    application.add_error_handler(error_handler)
 
     logger.info("Бот запущен. Ожидание сообщений...")
-    application.run_polling()
+    # drop_pending_updates: при перезапуске не доедаем накопившуюся за простой
+    # очередь обновлений, чтобы бот не отвечал на устаревшие сообщения.
+    application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":

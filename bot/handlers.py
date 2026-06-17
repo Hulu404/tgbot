@@ -38,8 +38,9 @@ logger = logging.getLogger(__name__)
     VENUE,
     DESCRIPTION,
     LAPTOP,
+    COMMENT,
     CONFIRM,
-) = range(11)
+) = range(12)
 
 # Разделитель диапазона времени: дефис или тире.
 _TIME_RANGE_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})\s*$")
@@ -86,6 +87,12 @@ def _add_more_date_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _comment_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⏭ Без комментария", callback_data="comment_skip")]]
+    )
+
+
 def _confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -108,6 +115,8 @@ def _format_dates_times(dates_times: list) -> str:
 def _build_summary(data: dict) -> str:
     """Формирует итоговое сообщение в Markdown."""
     dates_times_str = _format_dates_times(data.get('dates_times', []))
+    comment = data.get('comment', '').strip()
+    comment_block = f"\n\n💬 *Комментарий:* {comment}" if comment else ""
     return (
         "📋 *ЗАЯВКА НА ТЕХСОПРОВОЖДЕНИЕ*\n\n"
         f"👤 *Организатор:* {data['full_name']}\n"
@@ -119,12 +128,15 @@ def _build_summary(data: dict) -> str:
         "🎛 *Техсопровождение:*\n"
         f"{data['description']}\n\n"
         f"💻 *Ноутбук организатора:* {data['laptop']}"
+        f"{comment_block}"
     )
 
 
 def _build_plain_summary(data: dict) -> str:
     """Тот же итог, но без Markdown — для описания события в календаре."""
     dates_times_str = _format_dates_times(data.get('dates_times', []))
+    comment = data.get('comment', '').strip()
+    comment_block = f"\n\nКомментарий:\n{comment}" if comment else ""
     return (
         "ЗАЯВКА НА ТЕХСОПРОВОЖДЕНИЕ\n\n"
         f"Организатор: {data['full_name']}\n"
@@ -136,6 +148,7 @@ def _build_plain_summary(data: dict) -> str:
         "Техсопровождение:\n"
         f"{data['description']}\n\n"
         f"Ноутбук организатора: {data['laptop']}"
+        f"{comment_block}"
     )
 
 
@@ -293,13 +306,39 @@ async def laptop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
     context.user_data["laptop"] = "Да" if query.data == "laptop_yes" else "Нет"
 
-    summary = _build_summary(context.user_data)
     await query.edit_message_reply_markup(reply_markup=None)
     await query.message.reply_text(
-        summary + "\n\n──────────\nПроверьте заявку и подтвердите отправку:",
+        "🔟 Добавьте *комментарий* к заявке, если нужно: любые пожелания "
+        "или детали. Он попадёт в сводку и в описание события в календаре.\n\n"
+        "Напишите текст одним сообщением или нажмите «Без комментария».",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_comment_keyboard(),
+    )
+    return COMMENT
+
+
+async def _show_confirmation(message, data: dict) -> None:
+    """Показывает итоговую сводку с кнопками подтверждения."""
+    await message.reply_text(
+        _build_summary(data)
+        + "\n\n──────────\nПроверьте заявку и подтвердите отправку:",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_confirm_keyboard(),
     )
+
+
+async def comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["comment"] = update.message.text.strip()
+    await _show_confirmation(update.message, context.user_data)
+    return CONFIRM
+
+
+async def comment_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    context.user_data["comment"] = ""
+    await query.edit_message_reply_markup(reply_markup=None)
+    await _show_confirmation(query.message, context.user_data)
     return CONFIRM
 
 
@@ -443,6 +482,10 @@ def build_conversation_handler() -> ConversationHandler:
             VENUE: [MessageHandler(text_only, venue)],
             DESCRIPTION: [MessageHandler(text_only, description)],
             LAPTOP: [CallbackQueryHandler(laptop, pattern="^laptop_")],
+            COMMENT: [
+                CallbackQueryHandler(comment_skip, pattern="^comment_skip$"),
+                MessageHandler(text_only, comment),
+            ],
             CONFIRM: [CallbackQueryHandler(confirm, pattern="^confirm_")],
         },
         fallbacks=[

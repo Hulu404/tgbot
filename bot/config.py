@@ -1,6 +1,7 @@
 """Загрузка конфигурации из переменных окружения (.env)."""
 
 import base64
+import json
 import logging
 import os
 import re
@@ -51,7 +52,8 @@ WORK_CHAT_ID = os.getenv("WORK_CHAT_ID", "")
 CALENDAR_ID = _normalize_calendar_id(os.getenv("CALENDAR_ID", ""))
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")
 
-# Путь к ключу сервисного аккаунта. Относительный путь привязываем к папке с
+# Путь к файлу ключа сервисного аккаунта — для локальной разработки, когда
+# credentials.json лежит рядом с кодом. Относительный путь привязываем к папке с
 # кодом, а не к текущей рабочей директории, — иначе при запуске бота из другого
 # каталога файл «не находится» и календарь молча отключается.
 _creds_raw = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
@@ -60,29 +62,56 @@ if os.path.isabs(_creds_raw):
 else:
     GOOGLE_CREDENTIALS_JSON = os.path.join(os.path.dirname(__file__), _creds_raw)
 
-# На хостингах с эфемерной файловой системой (Railway, Heroku и т.п.) файл ключа
-# нельзя просто положить рядом с кодом: в git он не хранится (секрет), а после
-# каждого деплоя файловая система обнуляется. Поэтому поддерживаем передачу ключа
-# через переменную окружения GOOGLE_CREDENTIALS_JSON_B64 — это содержимое
-# credentials.json, закодированное в base64 (base64 выбран, чтобы переносы строк
-# в приватном ключе не ломались в UI переменных). Если переменная задана, при
-# старте декодируем её и пишем файл по пути GOOGLE_CREDENTIALS_JSON, а дальше всё
-# работает как с обычным файлом.
-_creds_b64 = os.getenv("GOOGLE_CREDENTIALS_JSON_B64", "").strip()
-if _creds_b64:
-    try:
-        decoded = base64.b64decode(_creds_b64)
-        with open(GOOGLE_CREDENTIALS_JSON, "wb") as fh:
-            fh.write(decoded)
-        logger.info(
-            "Ключ Google записан из GOOGLE_CREDENTIALS_JSON_B64 в %s",
-            GOOGLE_CREDENTIALS_JSON,
-        )
-    except Exception:
-        logger.exception(
-            "Не удалось декодировать GOOGLE_CREDENTIALS_JSON_B64 — "
-            "проверьте, что это корректный base64 от credentials.json."
-        )
+
+def _load_google_credentials_info() -> dict | None:
+    """Данные сервисного аккаунта Google как dict (или None, если ключа нет).
+
+    Ключ загружается ПРЯМО В ПАМЯТЬ — файл на диск не пишется. Это надёжно
+    работает на хостингах с эфемерной/только-для-чтения файловой системой
+    (Railway, Heroku и т.п.), где диск обнуляется после каждого деплоя.
+
+    Источники в порядке приоритета:
+    1. GOOGLE_CREDENTIALS_JSON_B64 — содержимое credentials.json, закодированное
+       в base64 (base64 берём, чтобы переносы строк в приватном ключе не ломались
+       в UI переменных окружения). Задаётся один раз — больше обновлять ничего не
+       надо.
+    2. Файл по пути GOOGLE_CREDENTIALS_JSON — для локальной разработки.
+    """
+    b64 = os.getenv("GOOGLE_CREDENTIALS_JSON_B64", "").strip()
+    if b64:
+        try:
+            raw = base64.b64decode(b64).decode("utf-8")
+            return json.loads(raw)
+        except Exception:
+            logger.exception(
+                "GOOGLE_CREDENTIALS_JSON_B64 задана, но её не удалось разобрать — "
+                "ожидается base64 от содержимого credentials.json. "
+                "Google Calendar будет отключён."
+            )
+            return None
+
+    if os.path.exists(GOOGLE_CREDENTIALS_JSON):
+        try:
+            with open(GOOGLE_CREDENTIALS_JSON, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            logger.exception(
+                "Не удалось прочитать файл ключа Google %s. "
+                "Google Calendar будет отключён.",
+                GOOGLE_CREDENTIALS_JSON,
+            )
+            return None
+
+    return None
+
+
+# Данные сервисного аккаунта, загруженные один раз при старте. None — ключа нет.
+GOOGLE_CREDENTIALS_INFO = _load_google_credentials_info()
+
+
+def google_credentials_available() -> bool:
+    """Есть ли ключ сервисного аккаунта Google (из base64-переменной или файла)."""
+    return GOOGLE_CREDENTIALS_INFO is not None
 
 
 def validate_config() -> None:
@@ -103,9 +132,9 @@ def validate_config() -> None:
         logger.warning(
             "CALENDAR_ID не задан — события в Google Calendar создаваться не будут."
         )
-    elif not os.path.exists(GOOGLE_CREDENTIALS_JSON):
+    elif not google_credentials_available():
         logger.warning(
-            "Файл учётных данных Google '%s' не найден — "
-            "события в Google Calendar создаваться не будут.",
+            "Учётные данные Google не заданы (ни GOOGLE_CREDENTIALS_JSON_B64, "
+            "ни файл '%s') — события в Google Calendar создаваться не будут.",
             GOOGLE_CREDENTIALS_JSON,
         )
